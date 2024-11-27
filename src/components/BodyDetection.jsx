@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState } from "react";
 import * as tf from "@tensorflow/tfjs";
-import "@tensorflow/tfjs-backend-webgl";
+import { moveNet } from "@tensorflow-models/posenet";
 
 const BodyDetection = () => {
   const [isModelLoaded, setModelLoaded] = useState(false);
@@ -11,12 +11,12 @@ const BodyDetection = () => {
     const loadModel = async () => {
       await tf.setBackend("webgl");
       await tf.ready();
+
       // Load MoveNet model from TF Hub
-      const modelUrl = "https://tfhub.dev/google/movenet/singlepose/lightning/4";
-      const model = await tf.loadGraphModel(modelUrl, { fromTFHub: true });
+      const model = await moveNet.load(); // Load the model once
       setModelLoaded(true);
-      console.log("Model loaded!");
-      detectPose(model);
+      console.log("MoveNet Model loaded!");
+      detectPose(model); // Start detecting pose once the model is loaded
     };
 
     const detectPose = async (model) => {
@@ -27,50 +27,98 @@ const BodyDetection = () => {
 
         const detect = async () => {
           const input = tf.browser.fromPixels(video);
-          const predictions = await model.executeAsync(input);
-          
-          // Draw the detected poses
-          drawPose(predictions, ctx);
-          input.dispose();
-          requestAnimationFrame(detect);
+          const poses = await model.estimateSinglePose(input, {
+            flipHorizontal: false,
+          });
+
+          // Draw the detected poses on canvas
+          drawPose(poses, ctx);
+          input.dispose(); // Dispose of the tensor to avoid memory leaks
+          requestAnimationFrame(detect); // Continuously detect poses
         };
 
         detect();
       }
     };
 
-    loadModel();
+    loadModel(); // Load the model when the component mounts
   }, [isModelLoaded]);
 
-  const drawPose = (predictions, ctx) => {
-    // You can process the predictions here and draw them on canvas
+  const drawPose = (pose, ctx) => {
+    // Clear the canvas before drawing the new pose
     ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-    predictions[0].forEach((keypoint) => {
-      const { y, x } = keypoint;
-      ctx.beginPath();
-      ctx.arc(x, y, 5, 0, 2 * Math.PI);
-      ctx.fillStyle = "red";
-      ctx.fill();
+
+    // Draw the keypoints (red circles)
+    pose.keypoints.forEach((keypoint) => {
+      const { y, x, score } = keypoint;
+      if (score > 0.5) { // Only draw keypoints with confidence above 50%
+        ctx.beginPath();
+        ctx.arc(x, y, 5, 0, 2 * Math.PI);
+        ctx.fillStyle = "red";
+        ctx.fill();
+      }
+    });
+
+    // Optionally, draw skeleton lines between the keypoints
+    drawSkeleton(pose.keypoints, ctx);
+  };
+
+  const drawSkeleton = (keypoints, ctx) => {
+    const adjacentKeyPoints = [
+      ["leftShoulder", "leftElbow"],
+      ["leftElbow", "leftWrist"],
+      ["rightShoulder", "rightElbow"],
+      ["rightElbow", "rightWrist"],
+      ["leftHip", "leftKnee"],
+      ["leftKnee", "leftAnkle"],
+      ["rightHip", "rightKnee"],
+      ["rightKnee", "rightAnkle"],
+      ["leftShoulder", "rightShoulder"],
+      ["leftHip", "rightHip"],
+    ];
+
+    adjacentKeyPoints.forEach(([part1, part2]) => {
+      const keypoint1 = keypoints.find((p) => p.part === part1);
+      const keypoint2 = keypoints.find((p) => p.part === part2);
+
+      if (keypoint1 && keypoint2 && keypoint1.score > 0.5 && keypoint2.score > 0.5) {
+        const { x: x1, y: y1 } = keypoint1.position;
+        const { x: x2, y: y2 } = keypoint2.position;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.strokeStyle = "green";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
     });
   };
 
   return (
-    <div className="App">
-      <h2>Pose Detection with MoveNet</h2>
-      <video
-        ref={videoRef}
-        width="640"
-        height="480"
-        autoPlay
-        muted
-        controls
-        onPlay={() => setModelLoaded(false)} // Make sure model loads only when video plays
-      >
-        <source src="/my-new-app/public/videoplayback.mp4" type="video/mp4" />
-      </video>
-      <canvas ref={canvasRef} width="640" height="480" />
+    <div className="flex flex-col items-center mt-8">
+      <h2 className="text-2xl font-semibold mb-4">Pose Detection with MoveNet</h2>
+      <div className="relative">
+        {/* Video with no controls (auto play) */}
+        <video
+          ref={videoRef}
+          className="w-full max-w-xl rounded-lg border-2 border-gray-300 mb-4"
+          autoPlay
+          muted
+          controls={false} // Removed video controls
+          onPlay={() => setModelLoaded(false)} // Only load model when the video starts
+        >
+          <source src="/my-new-app/public/videoplayback.mp4" type="video/mp4" />
+        </video>
+        
+        {/* Canvas for drawing pose */}
+        <canvas
+          ref={canvasRef}
+          className="absolute top-0 left-0 w-full max-w-xl h-full rounded-lg"
+        />
+      </div>
     </div>
   );
 };
 
 export default BodyDetection;
+
